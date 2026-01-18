@@ -9,20 +9,16 @@ DASHLESS_SIMPLE = [
 ]
 
 DASHLESS_COMPLEX = [
-    ['NOOP'],
-    ['RIGHT'],
-    ['RIGHT', 'JUMP'],
-    ['RIGHT', 'GRAB'],
-    ['JUMP'],
     ['GRAB'],
+    ['GRAB', 'RIGHT'],
+    ['RIGHT'],
+    ['GRAB', 'RIGHT', 'JUMP'],
     ['GRAB', 'JUMP'],
+    ['GRAB', 'LEFT'],
     ['LEFT'],
-    ['LEFT', 'JUMP'],
-    ['LEFT', 'GRAB'],
-    ['DOWN'],
-    ['DOWN', 'GRAB'],
-    ['UP'],
-    ['UP', 'GRAB']
+    ['GRAB', 'LEFT', 'JUMP'],
+    ['GRAB', 'DOWN'],
+    ['GRAB', 'UP']
 ]
 
 DASH_RESTRICTED = DASHLESS_COMPLEX + [

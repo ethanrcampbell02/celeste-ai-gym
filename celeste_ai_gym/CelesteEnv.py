@@ -10,14 +10,23 @@ import cv2
 logging.basicConfig(level=logging.INFO)
 
 class CelesteEnv(gym.Env):
+    # Map from chapter name to (target_x, target_y)
+    CHAPTER_TARGETS = {
+        "prologue": (2000.0, 60.0)
+    }
+
+    CHAPTER_ROOM_NAMES = {
+        "prologue": ["0", "1", "2", "3"]
+    }
 
     TCP_IP = "127.0.0.1"
     TCP_PORT = 5000
     BUFFER_SIZE = 2**19
 
-    def __init__(self, reward_mode="best", render_mode="human"):
+    def __init__(self, chapter="prologue", reward_mode="best", render_mode="human"):
         super().__init__()
 
+        self.chapter = chapter
         self.reward_mode = reward_mode
         self.render_mode = render_mode
 
@@ -175,21 +184,19 @@ class CelesteEnv(gym.Env):
         # Check if entered a new room
         if info is not None and "playerReachedNextRoom" in info and info["playerReachedNextRoom"]:
             current_room = info.get("levelName", None)
-            if current_room is not None and current_room not in self._visited_rooms:
+            if current_room is not None and current_room not in self._visited_rooms \
+                    and current_room in self.CHAPTER_ROOM_NAMES.get(self.chapter, []):
                 # New room discovered!
                 self._visited_rooms.add(current_room)
                 self._time_limit += 900  # Add 15 more seconds
                 logging.debug(f"Entered new room: {current_room}. Extended time limit by 15s. Total rooms: {len(self._visited_rooms)}")
             # Don't terminate - continue exploring
         
-        # Check if reached goal (player X >= target X)
-        if info is not None and self._json_data is not None:
-            player_x = self._json_data.get("playerXPosition", 0)
-            target_x = self._json_data.get("targetXPosition", float('inf'))
-            if player_x is not None and target_x is not None and player_x >= target_x:
-                reward += 10.0
-                terminated = True
-                logging.debug(f"Goal reached! Player X ({player_x:.1f}) >= Target X ({target_x:.1f})")
+        # Check if reached goal (distance within 20 of target)
+        if info is not None and distance <= 20.0:
+            reward += 10.0
+            terminated = True
+            logging.debug(f"Goal reached! Distance ({distance:.1f}) <= 20.0")
 
         # Penalize if died
         if info is not None and "playerDied" in info and info["playerDied"]:
@@ -287,15 +294,17 @@ class CelesteEnv(gym.Env):
 
     def _get_info(self):
         if self._json_data is not None:
+            target_x, target_y = self.CHAPTER_TARGETS.get(self.chapter, (2000.0, 60.0))
             return {
                 "distance": np.linalg.norm(
                     np.array([self._json_data["playerXPosition"], self._json_data["playerYPosition"]], dtype=np.float32) -
-                    np.array([self._json_data["targetXPosition"], self._json_data["targetYPosition"]], dtype=np.float32)
+                    np.array([target_x, target_y], dtype=np.float32)
                 ),
                 "steps": self._steps,
                 "playerDied": self._json_data["playerDied"] if "playerDied" in self._json_data else False,
                 "playerReachedNextRoom": self._json_data["playerReachedNextRoom"] if "playerReachedNextRoom" in self._json_data else False,
-                "levelName": self._json_data.get("levelName", "unknown"),
+                "chapter": self.chapter,
+                "levelName": self._json_data["levelName"] if "levelName" in self._json_data else "unknown",
                 "distance_travelled": self._distance_travelled if hasattr(self, "_distance_travelled") else 0.0
             }
         else:
@@ -362,9 +371,9 @@ class CelesteEnv(gym.Env):
                 if target_x is not None and target_y is not None:
                     target_text = f"Target: ({target_x:.1f}, {target_y:.1f})"
                     cv2.putText(display_img, target_text, (10, 120), font, font_scale, color, thickness)
-            
-            # Add status indicators
-            if info.get('playerDied', False):
+                    if info is not None and self._json_data is not None:
+                        chapter_name = self._json_data.get("chapterName", "unknown")
+                        target_x, _ = self.CHAPTER_TARGETS.get(chapter_name, (2000.0, 60.0))
                 cv2.putText(display_img, "DIED", (10, 150), font, font_scale, (0, 0, 255), thickness)  # Red
             if info.get('playerReachedNextRoom', False):
                 cv2.putText(display_img, "NEXT ROOM!", (10, 180), font, font_scale, (255, 255, 0), thickness)  # Cyan
