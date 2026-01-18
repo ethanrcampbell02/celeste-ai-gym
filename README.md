@@ -1,19 +1,17 @@
 # Celeste AI Gym
 
-A reinforcement learning environment for training AI agents to play Celeste using OpenAI Gym interface.
+A Gymnasium-compatible environment for Celeste gameplay, providing an interface for reinforcement learning agents.
 
 ## Overview
 
-This repository contains the Python-based reinforcement learning training infrastructure for teaching AI agents to play Celeste. It provides a Gym environment that interfaces with the Celeste game through TCP communication with the companion Celeste AI mod.
+This repository contains a custom Gym environment that interfaces with Celeste through TCP communication with the companion Celeste AI mod. This is a base environment implementation designed to be integrated with your own training code.
 
 ## Features
 
 - **Custom Gym Environment**: Full gymnasium-compatible environment for Celeste gameplay
-- **Deep RL Support**: Pre-configured for PPO training with Stable-Baselines3
-- **Real-time Training**: Direct interface with Celeste game through TCP socket communication
-- **Advanced Wrappers**: Frame skipping, action simplification, and reward shaping
-- **Comprehensive Monitoring**: TensorBoard integration and training visualization
-- **Model Persistence**: Automatic checkpointing and model saving
+- **Real-time Interface**: Direct communication with Celeste game through TCP socket
+- **Flexible Observation Space**: RGB frame observations from the game
+- **Multi-Binary Actions**: Support for all Celeste inputs (movement, jump, dash, grab)
 
 ## Architecture
 
@@ -28,7 +26,6 @@ Celeste Game + AI Mod (celeste-ai-mod)
 ### Prerequisites
 
 - Python 3.8+
-- CUDA-compatible GPU (recommended for training)
 - Celeste game with the companion AI mod installed
 
 ### Setup
@@ -52,27 +49,31 @@ Celeste Game + AI Mod (celeste-ai-mod)
 
 ## Usage
 
-### Training a New Model
-
-```bash
-python main.py
-```
-
-### Environment Testing
+### Testing the Environment
 
 ```bash
 python debug_env.py
 ```
 
-### Custom Training Configuration
+This will connect to a running Celeste instance and allow you to test the environment interface.
 
-Edit the configuration parameters in `main.py`:
+### Using in Your Own Code
 
 ```python
-TOTAL_TIMESTEPS = 1_000_000  # Training duration
-LEARNING_RATE = 3e-4         # PPO learning rate
-N_STEPS = 2048               # Steps per update
-BATCH_SIZE = 64              # Minibatch size
+from CelesteEnv import CelesteEnv
+
+# Create environment
+env = CelesteEnv()
+
+# Reset environment
+obs, info = env.reset()
+
+# Take actions
+action = env.action_space.sample()
+obs, reward, terminated, truncated, info = env.step(action)
+
+# Close when done
+env.close()
 ```
 
 ## Environment Details
@@ -92,67 +93,13 @@ BATCH_SIZE = 64              # Minibatch size
 
 ### Reward Function
 
-The environment supports multiple reward modes:
+The environment provides reward signals based on game state information received from the Celeste mod. The reward calculation is designed to be customizable for different training objectives.
 
-- **Distance-based**: Rewards based on progress through the level
-- **Room exploration**: Additional rewards for discovering new areas
-- **Time penalties**: Encourages faster completion
-- **Death penalties**: Negative rewards for player death
+**Default Reward Components:**
 
-## File Structure
-
-```
-celeste-ai-gym/
-├── CelesteEnv.py          # Main Gym environment
-├── main.py                # Training script
-├── wrappers.py            # Environment wrappers
-├── utils.py               # Utility functions
-├── debug_env.py           # Environment testing
-├── get_held_out_states.py # Validation data collection
-├── test_wrappers.py       # Wrapper testing
-├── requirements.txt       # Python dependencies
-├── models/                # Trained model checkpoints
-├── holdouts/              # Validation datasets
-└── README.md             # This file
-```
-
-## Environment Wrappers
-
-### SimplifiedActionSpace
-Reduces the action space complexity by mapping discrete actions to multi-binary combinations.
-
-### SkipFrame
-Implements frame skipping to reduce computational overhead and improve temporal consistency.
-
-### ClipReward
-Clips rewards to a specific range to improve training stability.
-
-## Model Training
-
-### Hyperparameters
-
-The default configuration uses PPO with the following settings:
-
-```python
-LEARNING_RATE = 3e-4
-N_STEPS = 2048
-BATCH_SIZE = 64
-N_EPOCHS = 10
-GAMMA = 0.99
-GAE_LAMBDA = 0.95
-CLIP_RANGE = 0.2
-ENT_COEF = 0.01
-VF_COEF = 0.005
-MAX_GRAD_NORM = 0.5
-```
-
-### Monitoring
-
-Training progress can be monitored using TensorBoard:
-
-```bash
-tensorboard --logdir=models
-```
+- **Progress Reward**: Based on the `distance` metric from the game state, which tracks progress towards the target
+- **Death Penalty**: Negative reward when `isDead` flag is true
+- **Level Completion**: Bonus reward when `completedLevel` flag is true
 
 ## TCP Communication Protocol
 
@@ -187,13 +134,28 @@ The environment communicates with the Celeste mod using JSON messages over TCP:
 }
 ```
 
-## Contributing
+## Integrating with Training Code
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+This environment can be used with any RL library that supports Gymnasium. Example with Stable-Baselines3:
+
+```python
+from stable_baselines3 import PPO
+from CelesteEnv import CelesteEnv
+
+env = CelesteEnv()
+model = PPO("CnnPolicy", env, verbose=1)
+model.learn(total_timesteps=100000)
+```
+
+## File Structure
+
+```
+celeste-ai-gym/
+├── CelesteEnv.py          # Main Gym environment
+├── debug_env.py           # Environment testing script
+├── requirements.txt       # Python dependencies
+└── README.md             # This file
+```
 
 ## Troubleshooting
 
@@ -201,30 +163,19 @@ The environment communicates with the Celeste mod using JSON messages over TCP:
 
 **Connection Refused**: Ensure the Celeste AI mod is loaded and the game is running.
 
-**CUDA Out of Memory**: Reduce batch size or use CPU training:
-```python
-device = "cpu"  # In main.py
-```
+**TCP Connection Timeout**: Check that the mod is listening on the correct port (default: 5000).
 
 **Environment Freezing**: Check TCP connection stability and mod compatibility.
 
-## Performance Tips
-
-- Use GPU acceleration for faster training
-- Adjust frame skip rate based on your hardware
-- Monitor memory usage during long training sessions
-- Use tensorboard for real-time training monitoring
-
 ## Dependencies
 
-Key dependencies include:
+Core dependencies:
 
 - `gymnasium`: RL environment interface
-- `stable-baselines3`: Deep RL algorithms
-- `torch`: Deep learning framework
-- `opencv-python`: Image processing
 - `numpy`: Numerical computing
-- `matplotlib`: Plotting and visualization
+- `opencv-python`: Image processing
+- `pillow`: Image handling
+- `mss`: Screen capture
 
 ## License
 
@@ -232,8 +183,7 @@ Key dependencies include:
 
 ## Related Projects
 
-- [Celeste AI Mod](../celeste-ai-mod): Companion C# mod for Celeste integration
-- [ProgrammaticInput](../ProgrammaticInput): Input automation framework
+- Celeste AI Mod: Companion C# mod for Celeste integration (required to use this environment)
 
 ## Citation
 
@@ -241,7 +191,7 @@ If you use this work in research, please cite:
 
 ```bibtex
 @misc{celeste-ai-gym,
-  title={Celeste AI Gym: Reinforcement Learning Environment for Celeste},
+  title={Celeste AI Gym: Gymnasium Environment for Celeste},
   author={[Your Name]},
   year={2026},
   url={[Repository URL]}

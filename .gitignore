@@ -23,6 +23,7 @@ MANIFEST
 
 # Virtual Environment
 venv/
+.venv/
 env/
 ENV/
 env.bak/
@@ -37,25 +38,6 @@ venv.bak/
 # VS Code
 .vscode/
 
-# Models and training data (optional - you may want to track small models)
-models/
-*.pt
-*.pth
-*.ckpt
-*.h5
-*.pkl
-*.pickle
-
-# Training logs
-logs/
-runs/
-tensorboard_logs/
-
-# Data files
-holdouts/
-*.npy
-*.npz
-
 # Environment variables
 .env
 
@@ -67,22 +49,6 @@ holdouts/
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# PyTorch
-*.pth
-*.pt
-
-# Matplotlib
-*.png
-*.jpg
-*.jpeg
-*.pdf
-*.svg
-
-# Video files from training
-*.mp4
-*.avi
-*.mov
 
 # Temporary files
 *.tmp

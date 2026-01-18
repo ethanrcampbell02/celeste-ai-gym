@@ -36,7 +36,7 @@ class CelesteEnv(gym.Env):
         dummy = self._recv_json()
         if dummy is None:
             logging.error("Failed to receive dummy message from C# client during initialization")
-            return None, None
+            raise RuntimeError("Failed to receive dummy message from C# client during initialization")
 
         self._json_data = None
 
@@ -69,10 +69,28 @@ class CelesteEnv(gym.Env):
         # Close connections gracefully
         try:
             self._conn.shutdown(socket.SHUT_RDWR)
-        except:
-            pass
-        self._conn.close()
-        self._server_sock.close()
+        except Exception as e:
+            logging.debug(f"Connection shutdown error (expected if already closed): {e}")
+        
+        try:
+            self._conn.close()
+        except Exception as e:
+            logging.debug(f"Connection close error: {e}")
+        
+        try:
+            self._server_sock.shutdown(socket.SHUT_RDWR)
+        except Exception as e:
+            logging.debug(f"Server socket shutdown error (expected): {e}")
+        
+        try:
+            self._server_sock.close()
+        except Exception as e:
+            logging.debug(f"Server socket close error: {e}")
+        
+        # Force cleanup with a small delay to allow OS to release the port
+        import time
+        time.sleep(0.1)
+        
         logging.info("Environment closed")
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
@@ -160,23 +178,22 @@ class CelesteEnv(gym.Env):
             if current_room is not None and current_room not in self._visited_rooms:
                 # New room discovered!
                 self._visited_rooms.add(current_room)
-                reward += 50.0
                 self._time_limit += 900  # Add 15 more seconds
-                logging.info(f"Entered new room: {current_room}. Extended time limit by 15s. Total rooms: {len(self._visited_rooms)}")
+                logging.debug(f"Entered new room: {current_room}. Extended time limit by 15s. Total rooms: {len(self._visited_rooms)}")
             # Don't terminate - continue exploring
         
         # Check if reached goal (player X >= target X)
         if info is not None and self._json_data is not None:
             player_x = self._json_data.get("playerXPosition", 0)
             target_x = self._json_data.get("targetXPosition", float('inf'))
-            if player_x >= target_x:
-                reward += 100.0
+            if player_x is not None and target_x is not None and player_x >= target_x:
+                reward += 10.0
                 terminated = True
-                logging.info(f"Goal reached! Player X ({player_x:.1f}) >= Target X ({target_x:.1f})")
+                logging.debug(f"Goal reached! Player X ({player_x:.1f}) >= Target X ({target_x:.1f})")
 
         # Penalize if died
         if info is not None and "playerDied" in info and info["playerDied"]:
-            reward = reward - 20.0
+            reward = reward - 10.0
 
         # Penalize for each step taken
         reward = reward - 0.2
@@ -286,14 +303,24 @@ class CelesteEnv(gym.Env):
 
     def render(self, observation=None, info=None):
         """Render the environment state in a window"""
+        if self.render_mode == "rgb_array":
+            # For recording/rgb_array mode, just return the current observation
+            if hasattr(self, '_json_data') and self._json_data is not None:
+                img_base64 = self._json_data.get("screenPixelsBase64")
+                if img_base64 is not None:
+                    width = self._json_data.get("screenWidth", 320)
+                    height = self._json_data.get("screenHeight", 180)
+                    return self._parse_image_base64(img_base64, width, height)
+            return None
+            
         if self.render_mode != "human":
-            return
+            return None
             
         # Don't call _get_obs() here to avoid protocol violations
         # Observation and info should be provided by caller
         if observation is None or info is None:
             logging.warning("render() called without observation/info - skipping")
-            return
+            return None
             
         # Create display image
         display_img = observation.copy()
@@ -312,20 +339,29 @@ class CelesteEnv(gym.Env):
             thickness = 2
             
             # Add distance info
-            distance_text = f"Distance: {info['distance']:.2f}"
+            distance = info.get('distance', None)
+            distance_text = f"Distance: {distance:.2f}" if distance is not None else "Distance: N/A"
             cv2.putText(display_img, distance_text, (10, 30), font, font_scale, color, thickness)
             
             # Add steps info
-            steps_text = f"Steps: {info['steps']}"
+            steps_text = f"Steps: {info.get('steps', 0)}"
             cv2.putText(display_img, steps_text, (10, 60), font, font_scale, color, thickness)
             
             # Add player position if available
             if self._json_data is not None:
-                pos_text = f"Player: ({self._json_data.get('playerXPosition', 0):.1f}, {self._json_data.get('playerYPosition', 0):.1f})"
-                cv2.putText(display_img, pos_text, (10, 90), font, font_scale, color, thickness)
+                player_x = self._json_data.get('playerXPosition', 0)
+                player_y = self._json_data.get('playerYPosition', 0)
+                target_x = self._json_data.get('targetXPosition', 0)
+                target_y = self._json_data.get('targetYPosition', 0)
                 
-                target_text = f"Target: ({self._json_data.get('targetXPosition', 0):.1f}, {self._json_data.get('targetYPosition', 0):.1f})"
-                cv2.putText(display_img, target_text, (10, 120), font, font_scale, color, thickness)
+                # Handle None values
+                if player_x is not None and player_y is not None:
+                    pos_text = f"Player: ({player_x:.1f}, {player_y:.1f})"
+                    cv2.putText(display_img, pos_text, (10, 90), font, font_scale, color, thickness)
+                
+                if target_x is not None and target_y is not None:
+                    target_text = f"Target: ({target_x:.1f}, {target_y:.1f})"
+                    cv2.putText(display_img, target_text, (10, 120), font, font_scale, color, thickness)
             
             # Add status indicators
             if info.get('playerDied', False):
