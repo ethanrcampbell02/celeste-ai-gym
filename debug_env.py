@@ -15,7 +15,7 @@ Press any key to take a step with the current action.
 import numpy as np
 import cv2
 import logging
-from CelesteEnv import CelesteEnv
+from celeste_ai_gym import CelesteEnv
 
 logging.basicConfig(level=logging.DEBUG)
 

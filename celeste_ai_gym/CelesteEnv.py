@@ -12,11 +12,13 @@ logging.basicConfig(level=logging.INFO)
 class CelesteEnv(gym.Env):
     # Map from chapter name to (target_x, target_y)
     CHAPTER_TARGETS = {
-        "prologue": (2000.0, 60.0)
+        "prologue": (2000.0, 20.0),
+        "city": (4000.0, -3096.0)
     }
 
     CHAPTER_ROOM_NAMES = {
-        "prologue": ["0", "1", "2", "3"]
+        "prologue": ["0", "1", "2", "3"],
+        "city": ["1", "2", "3", "4", "3b", "5", "6", "6a", "6b", "6c", "7", "8", "8b", "9", "9b", "10a", "11", "12", "12a", "end"]
     }
 
     TCP_IP = "127.0.0.1"
@@ -173,6 +175,11 @@ class CelesteEnv(gym.Env):
         elif self.reward_mode == "best":
             if distance < self._best_distance:
                 reward += self._best_distance - distance
+        elif self.reward_mode == "small_penalty":
+            if distance < self._prev_distance:
+                reward += self._prev_distance - distance
+            else:
+                reward += (self._prev_distance - distance) * 0.1
 
         # Update previous and best distances
         self._prev_distance = distance
@@ -189,18 +196,19 @@ class CelesteEnv(gym.Env):
                 # New room discovered!
                 self._visited_rooms.add(current_room)
                 self._time_limit += 900  # Add 15 more seconds
+                reward += 50.0  # Reward for discovering new room
                 logging.debug(f"Entered new room: {current_room}. Extended time limit by 15s. Total rooms: {len(self._visited_rooms)}")
             # Don't terminate - continue exploring
         
-        # Check if reached goal (distance within 20 of target)
-        if info is not None and distance <= 20.0:
-            reward += 10.0
+        # Check if reached goal (distance within 50 of target)
+        if info is not None and distance <= 30.0:
+            reward += 100.0
             terminated = True
-            logging.debug(f"Goal reached! Distance ({distance:.1f}) <= 20.0")
+            logging.debug(f"Goal reached! Distance ({distance:.1f}) <= 50.0")
 
         # Penalize if died
         if info is not None and "playerDied" in info and info["playerDied"]:
-            reward = reward - 10.0
+            reward = reward - 100.0
 
         # Penalize for each step taken
         reward = reward - 0.2
@@ -294,12 +302,19 @@ class CelesteEnv(gym.Env):
 
     def _get_info(self):
         if self._json_data is not None:
-            target_x, target_y = self.CHAPTER_TARGETS.get(self.chapter, (2000.0, 60.0))
+            # Check for required player position keys
+            if "playerXPosition" in self._json_data and "playerYPosition" in self._json_data:
+                target_x, target_y = self.CHAPTER_TARGETS.get(self.chapter, (2000.0, 60.0))
+                distance = np.linalg.norm(
+                    np.array([
+                        self._json_data["playerXPosition"],
+                        self._json_data["playerYPosition"]
+                    ], dtype=np.float32) - np.array([target_x, target_y], dtype=np.float32)
+                )
+            else:
+                distance = None
             return {
-                "distance": np.linalg.norm(
-                    np.array([self._json_data["playerXPosition"], self._json_data["playerYPosition"]], dtype=np.float32) -
-                    np.array([target_x, target_y], dtype=np.float32)
-                ),
+                "distance": distance,
                 "steps": self._steps,
                 "playerDied": self._json_data["playerDied"] if "playerDied" in self._json_data else False,
                 "playerReachedNextRoom": self._json_data["playerReachedNextRoom"] if "playerReachedNextRoom" in self._json_data else False,
@@ -374,7 +389,9 @@ class CelesteEnv(gym.Env):
                     if info is not None and self._json_data is not None:
                         chapter_name = self._json_data.get("chapterName", "unknown")
                         target_x, _ = self.CHAPTER_TARGETS.get(chapter_name, (2000.0, 60.0))
-                cv2.putText(display_img, "DIED", (10, 150), font, font_scale, (0, 0, 255), thickness)  # Red
+
+                if info.get('playerDied', True):
+                    cv2.putText(display_img, "DIED", (10, 150), font, font_scale, (0, 0, 255), thickness)  # Red
             if info.get('playerReachedNextRoom', False):
                 cv2.putText(display_img, "NEXT ROOM!", (10, 180), font, font_scale, (255, 255, 0), thickness)  # Cyan
         
