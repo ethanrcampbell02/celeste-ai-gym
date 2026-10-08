@@ -21,16 +21,53 @@ class CelesteEnv(gym.Env):
         "city": ["1", "2", "3", "4", "3b", "5", "6", "6a", "6b", "6c", "7", "8", "8b", "9", "9b", "10a", "11", "12", "12a", "end"]
     }
 
+    # Map from chapter to room name to preferred respawn location (x, y)
+    # Only rooms with specific preferred spawn points are listed
+    ROOM_RESPAWN_LOCATIONS = {
+        # "prologue": {
+        #     "0": (288.0, 104.0),
+        #     "1": (352.0, 104.0),
+        #     "2": (544.0, 136.0),
+        #     "3": (720.0, 152.0),
+        # },
+        "city": {
+            "1": (20.0, 137.0),
+            "2": (265.0, -31.0),
+            "3": (530.0, -207.0),
+            "4": (777.0, -399.0),
+            "3b": (928.0, -575.0),
+            "5": (1057.0, -755.0),
+            "6": (1312.0, -1046.0),
+            "6a": (1625.0, -1134.0),
+            "6b": (2015.0, -1135.0),
+            "6c": (2336.0, -1311.0),
+            "7": (2598.0, -1487.0),
+            "8": (2720.0, -1710.0),
+            "8b": (3024.0, -1816.0),
+            "9": (3280.0, -1936.0),
+            "9b": (3607.0, -2046.0),
+            "10a": (3821.0, -2223.0),
+            "11": (3721.0, -2439.0),
+            "12": (3439.0, -2703.0),
+            "12a": (3833.0, -2726.0),
+            "end": (3895.0, -3055.0),
+        }
+    }
+
     TCP_IP = "127.0.0.1"
     TCP_PORT = 5000
     BUFFER_SIZE = 2**19
 
-    def __init__(self, chapter="prologue", reward_mode="best", render_mode="human"):
+    def __init__(self, chapter="prologue", reward_mode="best", render_mode="human", random_start=False):
         super().__init__()
 
         self.chapter = chapter
         self.reward_mode = reward_mode
         self.render_mode = render_mode
+        self.random_start = random_start
+        
+        # Initialize numpy RNG for gymnasium compatibility
+        self._np_random = None
 
         self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -107,6 +144,12 @@ class CelesteEnv(gym.Env):
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         logging.debug("Resetting environment")
 
+        # Seed the random number generator for reproducibility
+        if seed is not None:
+            self._np_random = np.random.RandomState(seed)
+        elif self._np_random is None:
+            self._np_random = np.random.RandomState()
+
         self._options = options
 
         self._steps = 0
@@ -114,8 +157,37 @@ class CelesteEnv(gym.Env):
         self._time_limit = 900  # Reset to 15 seconds
         self._current_action = None  # Clear action for fresh start
 
+        # Select starting room (random or first)
+        starting_room = None
+        if self.random_start:
+            available_rooms = self.CHAPTER_ROOM_NAMES.get(self.chapter, [])
+            if available_rooms:
+                starting_room = self._np_random.choice(available_rooms)
+                logging.info(f"Random start enabled - starting in room: {starting_room}")
+        
+        # Store starting room and its index for reward logic
+        self._starting_room = starting_room
+        if starting_room is not None:
+            chapter_rooms = self.CHAPTER_ROOM_NAMES.get(self.chapter, [])
+            self._starting_room_index = chapter_rooms.index(starting_room) if starting_room in chapter_rooms else 0
+        else:
+            self._starting_room_index = 0
+        
+        # Set initial target to next room's spawn point
+        self._current_target = self._get_target_for_room_index(self._starting_room_index)
+
         # Send reset message to C#
-        reset_msg = json.dumps({"type": "reset"}).encode('utf-8')
+        reset_data = {"type": "reset"}
+        if starting_room is not None:
+            reset_data["startingRoom"] = starting_room
+            # Add respawn location if available for this room in the current chapter
+            chapter_respawns = self.ROOM_RESPAWN_LOCATIONS.get(self.chapter, {})
+            if starting_room in chapter_respawns:
+                respawn_x, respawn_y = chapter_respawns[starting_room]
+                reset_data["respawnX"] = respawn_x
+                reset_data["respawnY"] = respawn_y
+                logging.info(f"Using respawn location ({respawn_x}, {respawn_y}) for room {starting_room}")
+        reset_msg = json.dumps(reset_data).encode('utf-8')
         self._conn.sendall(reset_msg)
 
         # Get initial observation without sending any action
@@ -191,20 +263,39 @@ class CelesteEnv(gym.Env):
         # Check if entered a new room
         if info is not None and "playerReachedNextRoom" in info and info["playerReachedNextRoom"]:
             current_room = info.get("levelName", None)
+            chapter_rooms = self.CHAPTER_ROOM_NAMES.get(self.chapter, [])
             if current_room is not None and current_room not in self._visited_rooms \
-                    and current_room in self.CHAPTER_ROOM_NAMES.get(self.chapter, []):
-                # New room discovered!
-                self._visited_rooms.add(current_room)
-                self._time_limit += 900  # Add 15 more seconds
-                reward += 50.0  # Reward for discovering new room
-                logging.debug(f"Entered new room: {current_room}. Extended time limit by 15s. Total rooms: {len(self._visited_rooms)}")
+                    and current_room in chapter_rooms:
+                # Check if this room comes after the starting room
+                current_room_index = chapter_rooms.index(current_room)
+                if current_room_index > self._starting_room_index:
+                    # New room discovered that's forward progress!
+                    self._visited_rooms.add(current_room)
+                    self._time_limit += 900  # Add 15 more seconds
+                    reward += 50.0  # Reward for discovering new room
+                    
+                    # Update target to next room's spawn point
+                    self._current_target = self._get_target_for_room_index(current_room_index)
+                    logging.debug(f"Entered new room: {current_room}. Extended time limit by 15s. Total rooms: {len(self._visited_rooms)}. New target: {self._current_target}")
+                else:
+                    # Room is before or at starting room - just track it, no reward
+                    self._visited_rooms.add(current_room)
+                    logging.debug(f"Entered room {current_room} (before starting room {self._starting_room}), no reward")
             # Don't terminate - continue exploring
         
-        # Check if reached goal (distance within 50 of target)
-        if info is not None and distance <= 30.0:
-            reward += 100.0
-            terminated = True
-            logging.debug(f"Goal reached! Distance ({distance:.1f}) <= 50.0")
+        # Check if reached final chapter goal (distance within 30 of final target)
+        if info is not None and self._json_data is not None:
+            final_target_x, final_target_y = self.CHAPTER_TARGETS.get(self.chapter, (2000.0, 60.0))
+            distance_to_final = np.linalg.norm(
+                np.array([
+                    self._json_data["playerXPosition"],
+                    self._json_data["playerYPosition"]
+                ], dtype=np.float32) - np.array([final_target_x, final_target_y], dtype=np.float32)
+            )
+            if distance_to_final <= 30.0:
+                reward += 100.0
+                terminated = True
+                logging.debug(f"Final goal reached! Distance to final target ({distance_to_final:.1f}) <= 30.0")
 
         # Penalize if died
         if info is not None and "playerDied" in info and info["playerDied"]:
@@ -299,12 +390,40 @@ class CelesteEnv(gym.Env):
     def _parse_image_base64(img_base64, width, height):
         img_data = base64.b64decode(img_base64)
         return np.frombuffer(img_data, dtype=np.uint8).reshape((height, width, 4))[:,:,:3]
+    
+    def _get_target_for_room_index(self, current_room_index):
+        """Get the target position for a given room index.
+        Returns the spawn point of the next room, or the final chapter target if at the last room.
+        """
+        chapter_rooms = self.CHAPTER_ROOM_NAMES.get(self.chapter, [])
+        chapter_respawns = self.ROOM_RESPAWN_LOCATIONS.get(self.chapter, {})
+        
+        # If we're at or past the last room, use the final chapter target
+        if current_room_index >= len(chapter_rooms) - 1:
+            target = self.CHAPTER_TARGETS.get(self.chapter, (2000.0, 60.0))
+            logging.info(f"Using final chapter target: {target}")
+            return target
+        
+        # Otherwise, use the spawn point of the next room
+        next_room_index = current_room_index + 1
+        next_room = chapter_rooms[next_room_index]
+        
+        if next_room in chapter_respawns:
+            target = chapter_respawns[next_room]
+            logging.info(f"Target set to next room '{next_room}' spawn point: {target}")
+            return target
+        else:
+            # Fallback to final chapter target if no spawn point defined
+            target = self.CHAPTER_TARGETS.get(self.chapter, (2000.0, 60.0))
+            logging.warning(f"No spawn point defined for next room '{next_room}', using chapter target: {target}")
+            return target
 
     def _get_info(self):
         if self._json_data is not None:
             # Check for required player position keys
             if "playerXPosition" in self._json_data and "playerYPosition" in self._json_data:
-                target_x, target_y = self.CHAPTER_TARGETS.get(self.chapter, (2000.0, 60.0))
+                # Use dynamic target instead of fixed chapter target
+                target_x, target_y = self._current_target if hasattr(self, '_current_target') else self.CHAPTER_TARGETS.get(self.chapter, (2000.0, 60.0))
                 distance = np.linalg.norm(
                     np.array([
                         self._json_data["playerXPosition"],
